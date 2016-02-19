@@ -131,7 +131,7 @@ representations for the Cobra runtime:
 
 - `true` will be represented as the constant `0xFFFFFFFF`
 - `false` will be represented as the constant `0x7FFFFFFF`
-- numbers will be represented with a zero in the leftmost bit, as in class.
+- numbers will be represented with a zero in the rightmost bit, as in class.
   So, for example, `2` is represented as `0x00000004`.
 
 You should augment the provided `print` function in `main.c` to print these
