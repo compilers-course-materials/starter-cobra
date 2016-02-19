@@ -22,6 +22,7 @@ rule token = parse
   | "false" { FALSE }
   | "isbool" { ISBOOL }
   | "isnum" { ISNUM }
+  | "print" { PRINT }
   | ":" { COLON }
   | "else:" { ELSECOLON }
   | "let" { LET }
