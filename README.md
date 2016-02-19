@@ -215,7 +215,57 @@ Error: expected a boolean in if, got 54
 
 ### Memory Layout and Calling C Functions
 
+In order to set up the stack properly to call C functions, like `print` and
+your error functions, it's necessary to make a few changes to what we
+had in Boa.
 
+- **Allocating stack space ahead of time**: At the start of our generated code
+  (which we now recognize is a function body participating in a C runtime
+  stack), we need to make sure we make enough stack space for all variables we
+  create, and reserve that space ahead of time.  To do this, we move `esp` to
+  point to a location that is N words away (so N * 4 bytes for us), where N is
+  the greatest number of variables we need at once.  This is actually tricky
+  to compute to be fully optimal (teaser for later in the semester: by
+  “tricky” I mean NP-hard), but it's easy to get an OK heuristic – we can
+  compute the maximum depth of nested definitions.
+
+  To do this, we need the `count_vars` function, which we implemented in
+  class, so I've provided it.  You need to add instructions to the provided
+  spot in `stack_setup` in order to make sure the correct space is allocated
+  on the stack by subtracting the right amount from `esp`.
+  
+- **Using the Base Pointer**: In addition, this means that all variable
+  references need to happen from `ebp` rather than from `esp`.  This is
+  because `esp` can change while we are pushing arguments onto the stack for
+  other function calls, so `ebp` is the place we should trust for consistent
+  offsets.
+  
+- **Participating in the C stack**: As a C function callee (from `main`) and
+  caller (of error functions and `print`), our code has some responsibilities.
+  First, we need to store the old base pointer upon entry, and update the
+  base pointer to hold the current top of the stack (which includes the return
+  pointer into main, for example).  This is why the typical top two lines of
+  most C functions are:
+
+  ```
+  push ebp
+  mov ebp, esp
+  ```
+
+  Similarly, when we're done with the function, we need to restore the stack
+  pointer to its old location, and put the old base pointer value back.  This
+  is why the last lines before a `ret` in a C function are often:
+
+  ```
+  mov esp, ebp
+  pop ebp
+  ```
+
+- **Other Responsibilities**: If we were using registers beyond `eax`, `ebp`,
+  and `esp`, we'd be responsible for storing some of them as callee, and some
+  as caller.  But we're not going to go into those details for this
+  assignment.  Since we aren't using those registers, it has no effect on our
+  code's behavior.
 
 ### New Assembly Constructs
 
@@ -241,156 +291,77 @@ Error: expected a boolean in if, got 54
     corresponds to 16 bits.  To get a sized argument, you can use the `Sized`
     constructor from `arg`.
 
+- `HexConst`
 
+    Sometimes it's nice to read things in hex notation as opposed to decimal
+    constants.  I've provided a new `HexConst` `arg` that's useful for this
+    case.
+
+- `IPush`, `IPop`
+
+    These two instructions manage values on the stack.  `push` adds a value at
+    the current location of `esp`, and increments `esp` to point past the
+    added value.  `pop` decrements `esp` and moves the value at the location
+    `esp` was pointing to into the provided arg.
+
+- `ICall`
+
+    A call does two things:
+
+      - Pushes the next _code_ location onto the stack (just like a `push`),
+        which becomes the return pointer
+      - Performs an unconditional `jmp` to the provided label
+
+    `call` does not affect `ebp`, which the program must maintain on its own.
+
+- `IShr`, `IShl`: Bit shifting operations
+
+- `IAnd`, `IOr`, `IXor`: Bit masking operations
+
+- `IJo`, `IJno`: Jump to the provided label if the last arithmetic operation
+  did/did not overflow
 
 As usual, full summaries of the instructions we use are at [this assembly
 guide](http://www.cs.virginia.edu/~evans/cs216/guides/x86.html).
 
-- `IMul of arg * arg` — Multiply the left argument by the right argument, and
-  store in the left argument (typically the left argument is `eax` for us)
-  
-  Example: `mul eax, 4`
-
-- `ILabel of string` — Create a location in the code that can be jumped to
-  with `jmp`, `jne`, and other jump commands
-
-  Example: `this_is_a_label:`
-
-- `ICmp of arg * arg` — Compares the two arguments for equality.  Set the
-  _condition code_ in the machine to track if the arguments were equal, or if
-  the left was greater than or less than the right.  This information is used
-  by `jne` and other conditional jump commands.
-
-  Example: `cmp [esp-4], 0`
-
-  Example: `cmp eax, [esp-8]`
-
-- `IJne of string` — If the _condition code_ says that the last comparison
-  (`cmp`) was given equal arguments, do nothing.  If it says that the last
-  comparison was _not_ equal, immediately start executing instructions from
-  the given string label (by changing the program counter).
-
-  Example: `jne this_is_a_label`
-
-- `IJe of string` — Like `IJne` but with the jump/no jump cases reversed
-
-- `IJmp of string` — Unconditionally start executing instructions from the
-  given label (by changing the program counter)
-
-  Example: `jmp always_go_here`
-
-#### Combining `cmp` and Jumps for If
-
-When compiling an if expression, we need to execute exactly _one_ of the
-branches (and not accidentally evaluate both!).  A typical structure for doing
-this is to have two labels: one for the else case and one for the end of the
-if expression.  So the compiled shape may look like:
-
-```
-  cmp eax, 0    ; check if eax is equal to 0
-  je else_branch
-  ; commands for then branch go here
-  jmp end_of_if
-else_branch:
-  ; commands for else branch go here
-end_of_if:
-```
-
-Note that if we did _not_ put `jmp end_of_if` after the commands for the then
-branch, control would continue and evaluate the else branch as well.  So we
-need to make sure we skip over the else branch by unconditionally jumping to
-`end_of_if`.
-
-#### Creating New Names on the Fly
-
-In both ANF and when creating labels, we can't simply use the same identifier
-names and label names over and over.  The assembler will get confused if we
-have nested `if` expressions, because it won't know which `end_of_if` to `jmp`
-to, for example.  So we need some way of generating new names that we know
-won't conflict.
-
-You've been provided with a function `gen_temp` (meaning “generate
-temporary”) that takes a string and appends the value of a counter to it,
-which increases on each call.  You can use `gen_temp` to create fresh names
-for labels and variables, and be guaranteed the names won't overlap as long as
-you use base strings don't have numbers at the end.
-
-For example, when compiling an `if` expression, you might call `gen_temp`
-twice, once for the `else_branch` label, and once for the `end_of_if` label.
-This would produce output more like:
-
-```
-  cmp eax, 0    ; check if eax is equal to 0
-  je else_branch1
-  ; commands for then branch go here
-  jmp end_of_if2
-else_branch1:
-  ; commands for else branch go here
-end_of_if2:
-```
-
-And if there were a _nested_ if expression, it might have labels like
-`else_branch3` and `end_of_if4`.
-
-### Implementing ANF
-
-Aside from conditionals, the other major thing you need to do in the
-implementation of Boa is add an implementation of ANF to convert the
-user-facing syntax to the ANF syntax the compiler uses.  A few cases—`EIf`,
-`EPrim1`, and `ENumber`—are done for you.  You should study these in detail
-and understand what's going on.
-
-There is a detailed write up on the [course
-page](https://www.cs.swarthmore.edu/~jpolitz/cs75/s16/n_anf-tutorial.html)
-that describes how to think of implementing ANF in some detail, and gives
-examples of the pieces of the implementation.
-
-### A Note on Scope
-
-For this assignment, you can assume that all variables have different names.
-That means in particular you don't need to worry about nested instances of
-variables with the same name, duplicates within a list, etc.  The combination
-of these with `anf` causes some complications that go beyond our goals for
-this assignment.
 
 ### Testing Functions
 
-As before, `t` and `te` test the compiler end-to-end, checking for
-answers and errors, respectively.
+These are the same as they were for Boa.  ANF is provided, and hasn't changed
+aside from the addition of new primitives and `EBool`.  So your tests should
+focus on `te` and `t` tests.
 
-There are two new testing functions you can use as well:
-
-- `ta` – This takes an `aexpr` and an expected answer as a string, and
-  compiles and runs the `aexpr` using your compiler.  This is useful if you
-  want to, for instance, test binary operators in your compiler before you are
-  confident that the ANF transformation works.
-- `tanf` – This takes a `expr` and an `aexpr` and calls `anf` on the
-  `expr` with `{fun ie -> ACExpr(CImmExpr(ie))`, and checks that the
-  result is equal to the provided @tt{aexpr}.  You can use this to test your
-  ANF directly, to make sure it's producing the constrained expression you
-  expect, before you try compiling it.
+An old friend is helpful here, too: `valgrind`.  You can run `valgrind
+output/some_test.run` in order to get a little more feedback on tests that
+fail with `-10` as their exit code (which usually indicates a segfault).  This
+can sometimes tip you off quite well as to how memory is off, since sometimes
+you'll see code trying to jump to a constant that's in your code, or other
+obvious tells that there's something off in the stack.
 
 ### Recommended TODO List
 
 Here's an order in which you could consider tackling the implementation:
 
-1. Fill in the `ImmId` case in the compiler.  This will let you run things
-   like `sub1(sub1(5))` and other nested expressions.
-2. Write some tests for the input and output of nested `EPrim1` expressions in
-   `tanf`, to understand what the ANF transformation looks like on those
-   examples.
-3. Finish the `CIf` case in the compiler, so you can run simple programs with
-   `if`.  This includes the pretty-printing for the comparison and jump
-   instructions, etc.
-4. Write some tests for the input and output of performing `anf` on `EIf`
-   expressions, again to get a feel for what the transformation looks like.
-5. Work through both the `anf` implementation and the compiler implementation
-   of `Prim2`.  Write tests as you go.
-6. Work through both the `anf` implementation and the compiler implementation
-   of `ELet`.  Write tests as you go.
+1. Fix the `print` function in `main.c` so that it prints out the right
+   output.  It will need to check for the tag using C bitwise operators,
+   and use `printf` to print the right value.
+2. Take a first shot at figuring out how to increase the stack appropriately
+   by using `count_vars` and adding to `stack_setup`.
+3. Fill in the `CPrim1` case for everything but `print`, and figure out how to
+   check for errors, and call the "non-number" error reporting function.  Test
+   as you go.  Be aware that if the function call segfaults, it may be because
+   you need to refine step 2.
+3. Fill in all of the `CPrim2` cases, using the error-reporting from the last
+   step.  Test as you go.
+5. Finish up by completing the `if` case
+4. Implement `print` by compiling it to with a call to the `print` after
+   pushing appropriate arguments.  Be aware that if the call doesn't work, it
+   may be because of step 2 again.  Test as you go; be aware that you should
+   test interesting sequences of `print` expressions and let-bindings to make
+   sure your stack integrity is good before and after calls.
+
 
 ## Handing In
 
-A complete implementation of ANF and the compiler is due Wednesday, February
-17, at 11:59pm.
+A complete implementation is due by Thursday, February 25 at 11:59pm.
 
