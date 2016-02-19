@@ -336,7 +336,9 @@ output/some_test.run` in order to get a little more feedback on tests that
 fail with `-10` as their exit code (which usually indicates a segfault).  This
 can sometimes tip you off quite well as to how memory is off, since sometimes
 you'll see code trying to jump to a constant that's in your code, or other
-obvious tells that there's something off in the stack.
+obvious tells that there's something off in the stack.  Also, if you've done
+all your stack management correctly, `valgrind` will report a clean run for
+your program!
 
 ### Recommended TODO List
 
@@ -351,14 +353,14 @@ Here's an order in which you could consider tackling the implementation:
    check for errors, and call the "non-number" error reporting function.  Test
    as you go.  Be aware that if the function call segfaults, it may be because
    you need to refine step 2.
-3. Fill in all of the `CPrim2` cases, using the error-reporting from the last
-   step.  Test as you go.
-5. Finish up by completing the `if` case
 4. Implement `print` by compiling it to with a call to the `print` after
    pushing appropriate arguments.  Be aware that if the call doesn't work, it
    may be because of step 2 again.  Test as you go; be aware that you should
    test interesting sequences of `print` expressions and let-bindings to make
    sure your stack integrity is good before and after calls.
+3. Fill in all of the `CPrim2` cases, using the error-reporting from the last
+   step.  Test as you go.
+5. Complete the `if` case and test as you go.
 
 
 ## Handing In
