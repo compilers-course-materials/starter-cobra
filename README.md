@@ -3,44 +3,11 @@
 ![A cobra](https://upload.wikimedia.org/wikipedia/commons/thumb/9/94/Indian_Cobra.JPG/1920px-Indian_Cobra.JPG)
 
 In this assignment you'll implement a small language called Cobra, which
-implementes a **co**ded **b**inary **r**epresent**a**tion of different values.
-It also uses C function calls to implement some user-facing operations, like
-printing and reporting errors.
+implementes an en**co**ded **b**inary **r**epresent**a**tion of different
+values.  It also uses C function calls to implement some user-facing
+operations, like printing and reporting errors.
 
-## Errata
-
-- The counter for generated variable names is not reset before each call to
-  `anf`, which can make testing with `tanf` a little odd, since variables keep
-  incrementing.  If you want to have the counter reset before each call to
-  `anf`, you can change the body of the `anf` function to be:
-
-  ```
-  begin
-    count := 0;
-    anf_k e (fun imm -> ACExpr(CImmExpr(imm)))
-  end
-  ```
-- The arguments to `assert_equal` in `tanf` are backwards relative to how
-  OUnit reports the expected and actual values.  To get more useful error
-  reports, change the body of `tanf` from 
-
-  ```
-  assert_equal (anf program) expected ~printer:string_of_aexpr;;
-  ```
-
-  to
-
-  ```
-  assert_equal expected (anf program) ~printer:string_of_aexpr;;
-  ```
-
-- An early version of this assignment described `if` as taking the then branch
-  when the conditional was equal to 0.  It should take the _else_ branch when
-  the conditional is equal to 0, just like in C.
-
-
-
-## The Boa Language
+## The Cobra Language
 
 As usual, there are a few pieces that go into defining a language for us to
 compile.
@@ -48,21 +15,12 @@ compile.
 - A description of the concrete syntax – the text the programmer writes
 
 - A description of the abstract syntax – how to express what the
-  programmer wrote in a data structure our compiler uses.
+  programmer wrote in a data structure our compiler uses.  As in Boa, this
+  will include a surface `expr` type, and a core `aexpr` type.
 
 - The _semantics_—or description of the behavior—of the abstrac
   syntax, so our compiler knows what the code it generates should do.
 
-
-In boa, the second step is broken up into two:
-
-- A description of the user-facing abstract syntax – how to express what the
-  programmer wrote in a data structure our compiler uses, translated directly
-  from the concrete syntax.
-
-- A description of the compiler-facing abstract syntax – in this case, the
-  `aexpr`, `cexpr`, and `immexpr` datatypes, which are translated from the
-  user-facing abstract syntax.
 
 ### Concrete Syntax
 
@@ -75,13 +33,21 @@ The concrete syntax of Boa is:
   | <binop-expr>
 
 <binop-expr> :=
-  | <number>
   | <identifier>
+  | <number>
+  | true
+  | false
   | add1(<expr>)
   | sub1(<expr>)
+  | isnum(<expr>)
+  | isbool(<expr>)
+  | print(<expr>)
   | <expr> + <expr>
   | <expr> - <expr>
   | <expr> * <expr>
+  | <expr> < <expr>
+  | <expr> > <expr>
+  | <expr> == <expr>
   | ( <expr> )
 
 <bindings> :=
@@ -90,14 +56,11 @@ The concrete syntax of Boa is:
 }
 ```
 
-As in Adder, a `let` expression can have one _or more_ bindings.
-
-
 ### Abstract Syntax
 
 #### User-facing
 
-The abstract syntax of Boa is an OCaml datatype, and corresponds nearly
+The abstract syntax of Cobra is an OCaml datatype, and corresponds nearly
 one-to-one with the concrete syntax.  Here, we've added `E` prefixes to the
 constructors, which will distinguish them from the ANF forms later.
 
@@ -105,11 +68,17 @@ constructors, which will distinguish them from the ANF forms later.
 type prim1 =
   | Add1
   | Sub1
+  | Print
+  | IsNum
+  | IsBool
 
 type prim2 =
   | Plus
   | Minus
   | Times
+  | Less
+  | Greater
+  | Equal
 
 type expr =
   | ELet of (string * expr) list * expr
@@ -117,6 +86,7 @@ type expr =
   | EPrim2 of prim2 * expr * expr
   | EIf of expr * expr * expr
   | ENumber of int
+  | EBool of bool
   | EId of string
 ```
 
@@ -128,6 +98,7 @@ three categories
 ```
 type immexpr =
   | ImmNumber of int
+  | ImmBool of bool
   | ImmId of string
 
 and cexpr =
@@ -141,56 +112,136 @@ and aexpr =
   | ACExpr of cexpr
 ```
 
+These are quite similar to the constructs for Boa – the main additions are
+the new primitives.
 
 ### Semantics
 
-Numbers, unary operators, let-bindings, and ids have the same semantics as
-before.  Binary operator expressions evaluate their arguments and combine them
-based on the operator.  If expressions behave similarly to if statements in C:
-first, the conditional (first part) is evaluated.  If it is `0`, the else
-branch is evaluated.  Otherwise, the then branch is evaluated.
+With the addition of two types to the language, there are two main changes
+that ripple through the implementation:
+
+- The representation of values
+- The possibility of errors
+
+There is one other major addition, which is the `print` primitive, discussed
+more below.
+
+The representation of values requires a definition.  We'll use the following
+representations for the Cobra runtime:
+
+- `true` will be represented as the constant `0xFFFFFFFF`
+- `false` will be represented as the constant `0x7FFFFFFF`
+- numbers will be represented with a zero in the leftmost bit, as in class.
+  So, for example, `2` is represented as `0x00000004`.
+
+You should augment the provided `print` function in `main.c` to print these
+values correctly: `true` and `false` should print as those words, and numbers
+should print out as the underlying number being represented.
+
+You should raise errors in the following cases:
+
+- `-`, `+`, `*`, `<`, and `>` should raise an error (by printing it out) with
+  the substring `"expected a number"` if the operation doesn't get two numbers
+  (you can print more than this if you like, but it must be a substring)
+- `add1` and `sub1` should raise an error with the substring `"expected a
+  number"` if the argument isn't a number
+- `+`, `-`, and `*` should raise an error with the substring `"overflow"` if
+  the result overflows, and falls outside the range representable in 31 bits.
+  The `jo` instruction (not to be confused with the Joe Instructor) which
+  jumps if the last instruction overflowed, is helpful here.
+- `if` should raise an error with the substring `"expected a boolean"` if the
+  conditional value is not a boolean.
+
+These error messages should be printed on standard _error_, so use a
+call like:
+
+```
+fprintf(stderr, "Error: expected a number")
+```
+
+I recommend raising an error by adding some fixed code to the end of your
+generated code that calls into error functions you implement in `main.c`.  For
+example, you might insert code like:
+
+```
+internal_error_non_number:
+  push eax
+  call error_non_number
+```
+
+Which will store the value in `eax` on the top of the stack, move `esp`
+appropriately, and perform a jump into `error_non_number` function, which you
+will write in `main.c` as a function of one argument.
+
+The other operators, `==`, `isnum`, `isbool`, and `print`, cannot raise
+errors, and always succeed.
+
+The final piece of new semantics is the `print` operator.  A `print`
+expression should pass the value of its subexpression to the `print` function
+in `main.c`, and evaluate to the same value (`print` in `main.c` helps out
+here by returning its argument).  The main work you need to do here is similar
+to when calling an error function; evaluate the argument, push it onto the
+stack with `push`, and then `call` into `print`.
 
 ### Examples
 
 ```
-sub1(5)
+let x = 1 in
+let y = print(x + 1) in
+print(y + 2)
 
-# as an expr
+# will output
 
-EPrim1(Sub1, ENum(5))
-
-# evaluates to
-
+2
+4
 4
 ```
 
-```
-if 5 - 5: 6 else: 8
-
-# as an expr
-
-EIf(EPrim2(Minus, ENum(5), ENum(5)), ENum(6), ENum(8))
-
-# evaluates to
-
-8
-```
+The first 2 comes from the first print expression.  The first 4 comes from the
+second print expression.  The final line prints the answer of the program as
+usual, so there's an “extra” 4.
 
 ```
-let x = 10, y = 9 in
-if (x - y) * 2: x else: y
+if 54: true else: false
 
-# as an expr
+# prints (on standard error) something like:
 
-ELet([("x", ENum(10)), ("y", ENum(9))],
-  EIf(EPrim2(Times, EPrim2(Minus, EId("x"), EId("y")), ENum(2)),
-      EId("x"),
-      EId("y")))
+Error: expected a boolean in if, got 54
 ```
 
-## Implementing Boa
 
-### New Assembly Instructions
+
+## Implementing Cobra
+
+### Memory Layout and Calling C Functions
+
+
+
+### New Assembly Constructs
+
+- `Sized`
+
+    You may run into errors that report that the _size_ of an operation is
+    ambiguous.  This could happen if you write, for example:
+
+    ```
+    cmp [ebp-8], 0
+    ```
+
+    Because the assembler doesn't know if the program should move a four-byte
+    zero, a one-byte zero, or something in between into memory starting at
+    `[ebp-8]`.  To solve this, you can supply a size:
+
+    ```
+    cmp [ebp-8], DWORD 0
+    ```
+
+    This tells the assembler to use the “double word” size for 0, which
+    corresponds to 32 bits.  A `WORD` corresponds to 16 bits, and a `BYTE`
+    corresponds to 16 bits.  To get a sized argument, you can use the `Sized`
+    constructor from `arg`.
+
+
 
 As usual, full summaries of the instructions we use are at [this assembly
 guide](http://www.cs.virginia.edu/~evans/cs216/guides/x86.html).
