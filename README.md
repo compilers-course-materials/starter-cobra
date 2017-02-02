@@ -24,7 +24,7 @@ compile.
 
 ### Concrete Syntax
 
-The concrete syntax of Boa is:
+The concrete syntax of Cobra is:
 
 ```
 <expr> :=
